@@ -6,6 +6,7 @@
 
 import { create } from 'zustand';
 import { GameStatus, RUN_SPEED_BASE, PowerUpType } from './types';
+import { audio } from './components/System/Audio';
 
 interface PowerUpState {
   type: PowerUpType;
@@ -23,7 +24,11 @@ interface GameState {
   laneCount: number;
   gemsCollected: number;
   distance: number;
+  distanceSinceDamage: number;
   
+  // Accessibility
+  isPhotosensitiveMode: boolean;
+
   // Inventory / Abilities
   hasDoubleJump: boolean;
   hasImmortality: boolean;
@@ -37,6 +42,19 @@ interface GameState {
   hasDash: boolean;
   isDashActive: boolean;
 
+  // Shop Upgrade Modifiers
+  powerUpDurationMod: number; // Duration multiplier for level power-ups
+  cooldownMod: number;        // Cooldown duration multiplier (lower is faster)
+
+  // Expanded Shop Abilities
+  hasSonicPulse: boolean;
+  sonicPulseCooldown: number;
+  hasRebirth: boolean;
+  rebirthUsed: boolean;
+  hasChronoDriver: boolean;
+  isChronoActive: boolean;
+  chronoCooldown: number;
+
   // Level Power-ups
   activePowerUps: PowerUpState[];
   isSpeedBoosted: boolean;
@@ -46,12 +64,17 @@ interface GameState {
   // Actions
   startGame: () => void;
   restartGame: () => void;
+  pauseGame: () => void;
+  resumeGame: () => void;
   takeDamage: () => void;
+  resetDistanceSinceDamage: () => void;
   addScore: (amount: number) => void;
   collectGem: (value: number) => void;
   collectLetter: (index: number) => void;
   setStatus: (status: GameStatus) => void;
   setDistance: (dist: number) => void;
+  incrementDistances: (delta: number) => void;
+  togglePhotosensitiveMode: () => void;
   
   // Shop / Abilities
   buyItem: (type: string, cost: number) => boolean;
@@ -60,11 +83,15 @@ interface GameState {
   closeShop: () => void;
   activateImmortality: () => void;
   activateDash: () => void;
+  activateSonicPulse: () => void;
+  activateChronoDriver: () => void;
   rechargeShield: () => void;
+  instantRefresh: () => void;
 
   // Power-up Actions
   activatePowerUp: (type: PowerUpType) => void;
   updatePowerUps: (delta: number) => void;
+  tickCooldowns: (delta: number) => void;
 }
 
 const GEMINI_TARGET = ['G', 'E', 'M', 'I', 'N', 'I'];
@@ -81,6 +108,8 @@ export const useStore = create<GameState>((set, get) => ({
   laneCount: 3,
   gemsCollected: 0,
   distance: 0,
+  distanceSinceDamage: 0,
+  isPhotosensitiveMode: false,
   
   hasDoubleJump: false,
   hasImmortality: false,
@@ -91,6 +120,17 @@ export const useStore = create<GameState>((set, get) => ({
   scoreMultiplier: 1,
   hasDash: false,
   isDashActive: false,
+
+  powerUpDurationMod: 1.0,
+  cooldownMod: 1.0,
+
+  hasSonicPulse: false,
+  sonicPulseCooldown: 0,
+  hasRebirth: false,
+  rebirthUsed: false,
+  hasChronoDriver: false,
+  isChronoActive: false,
+  chronoCooldown: 0,
 
   activePowerUps: [],
   isSpeedBoosted: false,
@@ -108,6 +148,7 @@ export const useStore = create<GameState>((set, get) => ({
     laneCount: 3,
     gemsCollected: 0,
     distance: 0,
+    distanceSinceDamage: 0,
     hasDoubleJump: false,
     hasImmortality: false,
     isImmortalityActive: false,
@@ -117,6 +158,15 @@ export const useStore = create<GameState>((set, get) => ({
     scoreMultiplier: 1,
     hasDash: false,
     isDashActive: false,
+    powerUpDurationMod: 1.0,
+    cooldownMod: 1.0,
+    hasSonicPulse: false,
+    sonicPulseCooldown: 0,
+    hasRebirth: false,
+    rebirthUsed: false,
+    hasChronoDriver: false,
+    isChronoActive: false,
+    chronoCooldown: 0,
     activePowerUps: [],
     isSpeedBoosted: false,
     isFrenzyActive: false,
@@ -134,6 +184,7 @@ export const useStore = create<GameState>((set, get) => ({
     laneCount: 3,
     gemsCollected: 0,
     distance: 0,
+    distanceSinceDamage: 0,
     hasDoubleJump: false,
     hasImmortality: false,
     isImmortalityActive: false,
@@ -143,28 +194,62 @@ export const useStore = create<GameState>((set, get) => ({
     scoreMultiplier: 1,
     hasDash: false,
     isDashActive: false,
+    powerUpDurationMod: 1.0,
+    cooldownMod: 1.0,
+    hasSonicPulse: false,
+    sonicPulseCooldown: 0,
+    hasRebirth: false,
+    rebirthUsed: false,
+    hasChronoDriver: false,
+    isChronoActive: false,
+    chronoCooldown: 0,
     activePowerUps: [],
     isSpeedBoosted: false,
     isFrenzyActive: false,
     isTempInvincible: false
   }),
 
+  pauseGame: () => {
+    const { status } = get();
+    if (status === GameStatus.PLAYING) {
+      set({ status: GameStatus.PAUSED });
+    }
+  },
+
+  resumeGame: () => {
+    const { status } = get();
+    if (status === GameStatus.PAUSED) {
+      set({ status: GameStatus.PLAYING });
+    }
+  },
+
   takeDamage: () => {
-    const { lives, isImmortalityActive, isShieldActive, isDashActive, isTempInvincible, isSpeedBoosted } = get();
-    if (isImmortalityActive || isDashActive || isTempInvincible || isSpeedBoosted) return; 
+    const { lives, isImmortalityActive, isShieldActive, isDashActive, isTempInvincible, isSpeedBoosted, status, hasRebirth, rebirthUsed } = get();
+    if (status !== GameStatus.PLAYING || isImmortalityActive || isDashActive || isTempInvincible || isSpeedBoosted) return; 
+
+    set({ distanceSinceDamage: 0 });
 
     if (isShieldActive) {
       set({ isShieldActive: false });
+      audio.playShieldBreak();
       get().rechargeShield();
       return;
     }
 
     if (lives > 1) {
       set({ lives: lives - 1 });
+      audio.playDamage();
+    } else if (hasRebirth && !rebirthUsed) {
+      set({ rebirthUsed: true, lives: 1 });
+      audio.playImmortality(); 
+      window.dispatchEvent(new Event('rebirth-triggered'));
     } else {
       set({ lives: 0, status: GameStatus.GAME_OVER, speed: 0 });
+      audio.playDamage();
     }
   },
+
+  resetDistanceSinceDamage: () => set({ distanceSinceDamage: 0 }),
 
   addScore: (amount) => set((state) => {
     const frenzyMult = state.isFrenzyActive ? 3 : 1;
@@ -180,6 +265,12 @@ export const useStore = create<GameState>((set, get) => ({
   }),
 
   setDistance: (dist) => set({ distance: dist }),
+  incrementDistances: (delta) => set((state) => ({ 
+    distance: state.distance + delta,
+    distanceSinceDamage: state.distanceSinceDamage + delta 
+  })),
+
+  togglePhotosensitiveMode: () => set(state => ({ isPhotosensitiveMode: !state.isPhotosensitiveMode })),
 
   collectLetter: (index) => {
     const { collectedLetters, level, speed, scoreMultiplier, isFrenzyActive } = get();
@@ -204,6 +295,7 @@ export const useStore = create<GameState>((set, get) => ({
                 status: GameStatus.VICTORY,
                 score: get().score + (10000 * scoreMultiplier * frenzyMult)
             });
+            audio.playLevelComplete();
         }
       }
     }
@@ -220,6 +312,8 @@ export const useStore = create<GameState>((set, get) => ({
           nextLaneCount = 3 + (nextLevel - 1) * 2;
       }
 
+      audio.playLevelComplete();
+      
       set({
           level: nextLevel,
           laneCount: Math.min(nextLaneCount, 9),
@@ -264,39 +358,92 @@ export const useStore = create<GameState>((set, get) => ({
               case 'DASH':
                   set({ hasDash: true });
                   break;
+              case 'SONIC_PULSE':
+                  set({ hasSonicPulse: true });
+                  break;
+              case 'REBIRTH':
+                  set({ hasRebirth: true });
+                  break;
+              case 'CHRONO':
+                  set({ hasChronoDriver: true });
+                  break;
+              case 'EXTENDER':
+                  set({ powerUpDurationMod: 1.5 });
+                  break;
+              case 'RECHARGE':
+                  set({ cooldownMod: 0.7 });
+                  break;
+              case 'REFRESH':
+                  get().instantRefresh();
+                  break;
           }
+          audio.playLetterCollect(); 
           return true;
       }
       return false;
   },
 
+  instantRefresh: () => {
+    set({
+        sonicPulseCooldown: 0,
+        chronoCooldown: 0,
+        isShieldActive: get().hasShield
+    });
+    audio.playPowerUpCollect();
+  },
+
   activateImmortality: () => {
-      const { hasImmortality, isImmortalityActive } = get();
-      if (hasImmortality && !isImmortalityActive) {
+      const { hasImmortality, isImmortalityActive, status } = get();
+      if (status === GameStatus.PLAYING && hasImmortality && !isImmortalityActive) {
           set({ isImmortalityActive: true });
+          audio.playImmortality();
           setTimeout(() => set({ isImmortalityActive: false }), 5000);
       }
   },
 
   activateDash: () => {
-    const { hasDash, isDashActive } = get();
-    if (hasDash && !isDashActive) {
+    const { hasDash, isDashActive, status } = get();
+    if (status === GameStatus.PLAYING && hasDash && !isDashActive) {
       set({ isDashActive: true });
+      audio.playDash();
       setTimeout(() => set({ isDashActive: false }), 800);
     }
   },
 
+  activateSonicPulse: () => {
+    const { hasSonicPulse, sonicPulseCooldown, status, cooldownMod } = get();
+    if (status === GameStatus.PLAYING && hasSonicPulse && sonicPulseCooldown <= 0) {
+      set({ sonicPulseCooldown: 30 * cooldownMod });
+      audio.playDash(); 
+      window.dispatchEvent(new Event('sonic-pulse'));
+    }
+  },
+
+  activateChronoDriver: () => {
+    const { hasChronoDriver, chronoCooldown, status, cooldownMod } = get();
+    if (status === GameStatus.PLAYING && hasChronoDriver && chronoCooldown <= 0) {
+      set({ isChronoActive: true, chronoCooldown: 45 * cooldownMod });
+      audio.playImmortality();
+      setTimeout(() => set({ isChronoActive: false }), 5000);
+    }
+  },
+
   rechargeShield: () => {
+    const { cooldownMod } = get();
     setTimeout(() => {
-      if (get().hasShield) set({ isShieldActive: true });
-    }, 20000);
+      if (get().hasShield) {
+          set({ isShieldActive: true });
+          audio.playPowerUpCollect();
+      }
+    }, 20000 * cooldownMod);
   },
 
   activatePowerUp: (type: PowerUpType) => {
+    const { powerUpDurationMod } = get();
     const durationMap = {
-      [PowerUpType.SPEED]: 4,
-      [PowerUpType.FRENZY]: 8,
-      [PowerUpType.SHIELD]: 6
+      [PowerUpType.SPEED]: 4 * powerUpDurationMod,
+      [PowerUpType.FRENZY]: 8 * powerUpDurationMod,
+      [PowerUpType.SHIELD]: 6 * powerUpDurationMod
     };
 
     set((state) => {
@@ -320,7 +467,7 @@ export const useStore = create<GameState>((set, get) => ({
 
   updatePowerUps: (delta: number) => {
     set((state) => {
-      if (state.activePowerUps.length === 0) return {};
+      if (state.status !== GameStatus.PLAYING || state.activePowerUps.length === 0) return {};
 
       const nextPowerUps = state.activePowerUps
         .map(p => ({ ...p, timeLeft: p.timeLeft - delta }))
@@ -331,6 +478,16 @@ export const useStore = create<GameState>((set, get) => ({
         isSpeedBoosted: nextPowerUps.some(p => p.type === PowerUpType.SPEED),
         isFrenzyActive: nextPowerUps.some(p => p.type === PowerUpType.FRENZY),
         isTempInvincible: nextPowerUps.some(p => p.type === PowerUpType.SHIELD)
+      };
+    });
+  },
+
+  tickCooldowns: (delta: number) => {
+    set((state) => {
+      if (state.status !== GameStatus.PLAYING) return {};
+      return {
+        sonicPulseCooldown: Math.max(0, state.sonicPulseCooldown - delta),
+        chronoCooldown: Math.max(0, state.chronoCooldown - delta)
       };
     });
   },

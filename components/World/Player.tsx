@@ -41,7 +41,12 @@ export const Player: React.FC = () => {
   const rightLegRef = useRef<THREE.Group>(null);
   const headRef = useRef<THREE.Group>(null);
 
-  const { status, laneCount, takeDamage, hasDoubleJump, activateImmortality, isImmortalityActive, isShieldActive, hasDash, activateDash, isDashActive, isSpeedBoosted, isTempInvincible } = useStore();
+  const { 
+    status, laneCount, takeDamage, hasDoubleJump, activateImmortality, 
+    isImmortalityActive, isShieldActive, hasDash, activateDash, 
+    isDashActive, isSpeedBoosted, isTempInvincible,
+    activateSonicPulse, activateChronoDriver, isChronoActive
+  } = useStore();
   
   const [lane, setLane] = useState(0);
   const targetX = useRef(0);
@@ -57,8 +62,9 @@ export const Player: React.FC = () => {
 
   const { armorMaterial, jointMaterial, glowMaterial, shadowMaterial } = useMemo(() => {
       const isUltra = isImmortalityActive || isTempInvincible;
-      const armorColor = isUltra ? '#ffd700' : (isDashActive || isSpeedBoosted ? '#00ffff' : '#00aaff');
-      const glowColor = isUltra ? '#ffffff' : '#00ffff';
+      const isPower = isDashActive || isSpeedBoosted || isChronoActive;
+      const armorColor = isUltra ? '#ffd700' : (isPower ? '#00ffff' : '#00aaff');
+      const glowColor = isUltra ? '#ffffff' : (isChronoActive ? '#aa00ff' : '#00ffff');
       
       return {
           armorMaterial: new THREE.MeshStandardMaterial({ color: armorColor, roughness: 0.3, metalness: 0.8 }),
@@ -66,7 +72,7 @@ export const Player: React.FC = () => {
           glowMaterial: new THREE.MeshBasicMaterial({ color: glowColor }),
           shadowMaterial: new THREE.MeshBasicMaterial({ color: '#000000', opacity: 0.3, transparent: true }),
       };
-  }, [isImmortalityActive, isDashActive, isSpeedBoosted, isTempInvincible]);
+  }, [isImmortalityActive, isDashActive, isSpeedBoosted, isTempInvincible, isChronoActive]);
 
   useEffect(() => {
       if (status === GameStatus.PLAYING) {
@@ -88,11 +94,21 @@ export const Player: React.FC = () => {
 
   useEffect(() => {
       const onCollect = () => setFlashIntensity(1.5);
+      const onRebirth = () => {
+          setFlashIntensity(3.0);
+          isInvincible.current = true;
+          lastDamageTime.current = Date.now() + 1500; // Extra long I-frames
+      };
       window.addEventListener('item-collected', onCollect);
-      return () => window.removeEventListener('item-collected', onCollect);
+      window.addEventListener('rebirth-triggered', onRebirth);
+      return () => {
+          window.removeEventListener('item-collected', onCollect);
+          window.removeEventListener('rebirth-triggered', onRebirth);
+      };
   }, []);
 
   const triggerJump = () => {
+    if (status !== GameStatus.PLAYING) return;
     const maxJumps = hasDoubleJump ? 2 : 1;
     if (!isJumping.current) {
         audio.playJump(false);
@@ -111,67 +127,37 @@ export const Player: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (status !== GameStatus.PLAYING) return;
       const maxLane = Math.floor(laneCount / 2);
-      if (e.key === 'ArrowLeft') setLane(l => Math.max(l - 1, -maxLane));
-      else if (e.key === 'ArrowRight') setLane(l => Math.min(l + 1, maxLane));
-      else if (e.key === 'ArrowUp' || e.key === 'w') triggerJump();
-      else if (e.key === ' ' || e.key === 'Enter') activateImmortality();
-      else if (e.key === 'Shift') activateDash();
+      const key = e.key.toLowerCase();
+      
+      if (key === 'arrowleft' || key === 'a') setLane(l => Math.max(l - 1, -maxLane));
+      else if (key === 'arrowright' || key === 'd') setLane(l => Math.min(l + 1, maxLane));
+      else if (key === 'arrowup' || key === 'w') triggerJump();
+      else if (key === ' ' || key === 'enter') activateImmortality();
+      else if (key === 'shift') activateDash();
+      else if (key === 'q') activateSonicPulse();
+      else if (key === 'c') activateChronoDriver();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [status, laneCount, hasDoubleJump, activateImmortality, activateDash]);
-
-  useEffect(() => {
-    let touchStartX = 0;
-    let touchStartY = 0;
-
-    const handleTouchStart = (e: TouchEvent) => {
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-    };
-
-    const handleTouchEnd = (e: TouchEvent) => {
-      if (status !== GameStatus.PLAYING) return;
-
-      const touchEndX = e.changedTouches[0].clientX;
-      const touchEndY = e.changedTouches[0].clientY;
-      const deltaX = touchEndX - touchStartX;
-      const deltaY = touchStartY - touchEndY;
-      const maxLane = Math.floor(laneCount / 2);
-
-      const threshold = 30;
-
-      if (Math.abs(deltaY) > Math.abs(deltaX) && deltaY > threshold) {
-        triggerJump();
-      } else if (Math.abs(deltaX) > threshold) {
-        if (deltaX > 0) {
-          setLane(l => Math.min(l + 1, maxLane));
-        } else {
-          setLane(l => Math.max(l - 1, -maxLane));
-        }
-      }
-    };
-
-    window.addEventListener('touchstart', handleTouchStart, false);
-    window.addEventListener('touchend', handleTouchEnd, false);
-    return () => {
-      window.removeEventListener('touchstart', handleTouchStart);
-      window.removeEventListener('touchend', handleTouchEnd);
-    };
-  }, [status, laneCount, hasDoubleJump, triggerJump]);
+  }, [status, laneCount, hasDoubleJump, activateImmortality, activateDash, activateSonicPulse, activateChronoDriver]);
 
   useFrame((state, delta) => {
     if (!groupRef.current) return;
-    if (status !== GameStatus.PLAYING && status !== GameStatus.SHOP) return;
+    if (status !== GameStatus.PLAYING && status !== GameStatus.PAUSED && status !== GameStatus.SHOP) return;
 
-    // 1. Horizontal Position
     targetX.current = lane * LANE_WIDTH;
     groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, targetX.current, delta * 15);
 
+    if (status !== GameStatus.PLAYING) return;
+
+    // Adjust for Chrono Warp
+    const timeScale = isChronoActive ? 0.5 : 1.0;
+    const adjustedDelta = delta * timeScale;
+
     // 2. Physics (Jump)
     if (isJumping.current) {
-        groupRef.current.position.y += velocityY.current * delta;
-        velocityY.current -= GRAVITY * delta;
+        groupRef.current.position.y += velocityY.current * adjustedDelta;
+        velocityY.current -= GRAVITY * adjustedDelta;
         if (groupRef.current.position.y <= 0) {
             groupRef.current.position.y = 0;
             isJumping.current = false;
@@ -180,14 +166,14 @@ export const Player: React.FC = () => {
             if (bodyRef.current) bodyRef.current.rotation.x = 0;
         }
         if (jumpsPerformed.current === 2 && bodyRef.current) {
-             spinRotation.current -= delta * 15;
+             spinRotation.current -= adjustedDelta * 15;
              if (spinRotation.current < -Math.PI * 2) spinRotation.current = -Math.PI * 2;
              bodyRef.current.rotation.x = spinRotation.current;
         }
     }
 
-    // Camera FX for Dash/Nitro
-    const targetFov = (isDashActive || isSpeedBoosted) ? 85 : 60;
+    // Camera FX for Dash/Nitro/Chrono
+    const targetFov = (isDashActive || isSpeedBoosted) ? 85 : (isChronoActive ? 50 : 60);
     camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, delta * 10);
     camera.updateProjectionMatrix();
 
@@ -224,18 +210,6 @@ export const Player: React.FC = () => {
     }
   });
 
-  useEffect(() => {
-     const checkHit = (e: any) => {
-        if (isInvincible.current || isImmortalityActive || isDashActive || isSpeedBoosted || isTempInvincible) return;
-        audio.playDamage();
-        takeDamage();
-        isInvincible.current = true;
-        lastDamageTime.current = Date.now();
-     };
-     window.addEventListener('player-hit', checkHit);
-     return () => window.removeEventListener('player-hit', checkHit);
-  }, [takeDamage, isImmortalityActive, isDashActive, isSpeedBoosted, isTempInvincible]);
-
   return (
     <group ref={groupRef} position={[0, 0, 0]}>
       <pointLight ref={lightRef} position={[0, 1.5, 0.5]} color="#00ffff" distance={5} decay={2} intensity={0} />
@@ -251,6 +225,13 @@ export const Player: React.FC = () => {
           <mesh position={[0, 1.1, -0.5]}>
               <boxGeometry args={[1.0, 2.0, 4.0]} />
               <meshBasicMaterial color="#00ffff" transparent opacity={0.1} />
+          </mesh>
+      )}
+
+      {isChronoActive && (
+          <mesh position={[0, 1.1, 0]}>
+              <sphereGeometry args={[2.0, 32, 32]} />
+              <meshBasicMaterial color="#aa00ff" transparent opacity={0.05} side={THREE.BackSide} />
           </mesh>
       )}
 

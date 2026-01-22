@@ -8,6 +8,7 @@
 export enum GameStatus {
   MENU = 'MENU',
   PLAYING = 'PLAYING',
+  PAUSED = 'PAUSED',
   SHOP = 'SHOP',
   GAME_OVER = 'GAME_OVER',
   VICTORY = 'VICTORY'
@@ -22,7 +23,8 @@ export enum ObjectType {
   MISSILE = 'MISSILE',
   SPINNER = 'SPINNER',
   PULSER = 'PULSER',
-  POWERUP = 'POWERUP'
+  POWERUP = 'POWERUP',
+  LASER_GRID = 'LASER_GRID'
 }
 
 export enum PowerUpType {
