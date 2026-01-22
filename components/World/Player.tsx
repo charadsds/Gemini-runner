@@ -121,6 +121,45 @@ export const Player: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [status, laneCount, hasDoubleJump, activateImmortality, activateDash]);
 
+  useEffect(() => {
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (status !== GameStatus.PLAYING) return;
+
+      const touchEndX = e.changedTouches[0].clientX;
+      const touchEndY = e.changedTouches[0].clientY;
+      const deltaX = touchEndX - touchStartX;
+      const deltaY = touchStartY - touchEndY;
+      const maxLane = Math.floor(laneCount / 2);
+
+      const threshold = 30;
+
+      if (Math.abs(deltaY) > Math.abs(deltaX) && deltaY > threshold) {
+        triggerJump();
+      } else if (Math.abs(deltaX) > threshold) {
+        if (deltaX > 0) {
+          setLane(l => Math.min(l + 1, maxLane));
+        } else {
+          setLane(l => Math.max(l - 1, -maxLane));
+        }
+      }
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, false);
+    window.addEventListener('touchend', handleTouchEnd, false);
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [status, laneCount, hasDoubleJump, triggerJump]);
+
   useFrame((state, delta) => {
     if (!groupRef.current) return;
     if (status !== GameStatus.PLAYING && status !== GameStatus.SHOP) return;

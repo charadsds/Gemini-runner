@@ -13,6 +13,7 @@ import { Player } from './components/World/Player';
 import { LevelManager } from './components/World/LevelManager';
 import { Effects } from './components/World/Effects';
 import { HUD } from './components/UI/HUD';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useStore } from './store';
 import { GameStatus, RUN_SPEED_BASE } from './types';
 import { audio } from './components/System/Audio';
@@ -84,21 +85,32 @@ function Scene() {
 }
 
 function App() {
+  const isMobile = window.innerWidth < 768;
+  const dpr = isMobile ? [1, 1.2] : [1, 1.5];
+
   return (
-    <div className="relative w-full h-screen bg-black overflow-hidden select-none">
-      <HUD />
-      <Canvas
-        shadows
-        dpr={[1, 1.5]} 
-        gl={{ antialias: false, stencil: false, depth: true, powerPreference: "high-performance" }}
-        camera={{ position: [0, 5.5, 8], fov: 60 }}
-      >
-        <CameraController />
-        <Suspense fallback={null}>
-            <Scene />
-        </Suspense>
-      </Canvas>
-    </div>
+    <ErrorBoundary>
+      <div className="relative w-full h-screen bg-black overflow-hidden select-none">
+        <HUD />
+        <Canvas
+          shadows={!isMobile}
+          dpr={dpr}
+          gl={{
+            antialias: !isMobile,
+            stencil: false,
+            depth: true,
+            powerPreference: "high-performance",
+            precision: isMobile ? "mediump" : "highp"
+          }}
+          camera={{ position: [0, 5.5, 8], fov: 60 }}
+        >
+          <CameraController />
+          <Suspense fallback={null}>
+              <Scene />
+          </Suspense>
+        </Canvas>
+      </div>
+    </ErrorBoundary>
   );
 }
 

@@ -8,11 +8,13 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { Text3D, Center } from '@react-three/drei';
 import { v4 as uuidv4 } from 'uuid';
 import { useStore } from '../../store';
-import { GameObject, ObjectType, LANE_WIDTH, SPAWN_DISTANCE, REMOVE_DISTANCE, GameStatus, GEMINI_COLORS, PowerUpType } from '../../types';
+import { GameObject, ObjectType, LANE_WIDTH, SPAWN_DISTANCE, REMOVE_DISTANCE, GameStatus, PowerUpType } from '../../types';
 import { audio } from '../System/Audio';
+import { getLetterInterval, getRandomLane, spawnLetter, spawnRandomObstacle } from './ObjectSpawner';
+import { checkShopPortalCollision, checkDamageCollision, checkCollectionCollision } from './CollisionDetection';
+import { PowerUp } from './PowerUpSystem';
 
 // Geometry Constants
 const OBSTACLE_HEIGHT = 1.6;
@@ -37,11 +39,6 @@ const SPINNER_ARM_GEO = new THREE.BoxGeometry(4.0, 0.1, 0.1);
 const PULSER_CORE_GEO = new THREE.OctahedronGeometry(0.5);
 const PULSER_FIELD_GEO = new THREE.SphereGeometry(1, 16, 16);
 
-// Powerup Geometries
-const POWERUP_BASE_GEO = new THREE.SphereGeometry(0.6, 16, 16);
-const SPEED_ICON_GEO = new THREE.TorusKnotGeometry(0.3, 0.08, 64, 8);
-const FRENZY_ICON_GEO = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 32);
-const SHIELD_ICON_GEO = new THREE.OctahedronGeometry(0.4, 0);
 
 // Shadow Geometries
 const SHADOW_LETTER_GEO = new THREE.PlaneGeometry(2, 0.6);
@@ -56,13 +53,15 @@ const SHOP_BACK_GEO = new THREE.BoxGeometry(1, 5, 1.2);
 const SHOP_OUTLINE_GEO = new THREE.BoxGeometry(1, 7.2, 0.8);
 const SHOP_FLOOR_GEO = new THREE.PlaneGeometry(1, 4);
 
-const PARTICLE_COUNT = 800; 
-const BASE_LETTER_INTERVAL = 150; 
-
-const getLetterInterval = (level: number) => {
-    return BASE_LETTER_INTERVAL * Math.pow(1.3, Math.max(0, level - 1));
+const getOptimalParticleCount = (): number => {
+  const isMobile = window.innerWidth < 768;
+  const isLowPower = navigator.deviceMemory && navigator.deviceMemory < 4;
+  if (isMobile && isLowPower) return 200;
+  if (isMobile) return 400;
+  return 800;
 };
 
+const PARTICLE_COUNT = getOptimalParticleCount();
 const FONT_URL = "https://cdn.jsdelivr.net/npm/three/examples/fonts/helvetiker_bold.typeface.json";
 
 // --- Particle System ---
@@ -161,11 +160,6 @@ const ParticleSystem: React.FC = () => {
     );
 };
 
-
-const getRandomLane = (laneCount: number) => {
-    const max = Math.floor(laneCount / 2);
-    return Math.floor(Math.random() * (max * 2 + 1)) - max;
-};
 
 export const LevelManager: React.FC = () => {
   const { 
@@ -288,74 +282,33 @@ export const LevelManager: React.FC = () => {
 
         let keep = true;
         if (obj.active) {
-            const zThreshold = 2.0; 
-            const inZZone = (prevZ < playerPos.z + zThreshold) && (obj.position[2] > playerPos.z - zThreshold);
-            
             if (obj.type === ObjectType.SHOP_PORTAL) {
-                const dz = Math.abs(obj.position[2] - playerPos.z);
-                if (dz < 2) { 
-                     openShop();
-                     obj.active = false;
-                     hasChanges = true;
-                     keep = false; 
+                if (checkShopPortalCollision(obj, playerPos)) {
+                    openShop();
+                    obj.active = false;
+                    hasChanges = true;
+                    keep = false;
                 }
-            } else if (inZZone) {
-                const dx = Math.abs(obj.position[0] - playerPos.x);
-                
-                const isDamageSource = 
-                    obj.type === ObjectType.OBSTACLE || 
-                    obj.type === ObjectType.ALIEN || 
+            } else {
+                const isDamageSource =
+                    obj.type === ObjectType.OBSTACLE ||
+                    obj.type === ObjectType.ALIEN ||
                     obj.type === ObjectType.MISSILE ||
                     obj.type === ObjectType.SPINNER ||
                     obj.type === ObjectType.PULSER;
-                     
+
                 if (isDamageSource) {
-                    const playerBottom = playerPos.y;
-                    const playerTop = playerPos.y + 1.8;
-                    let objBottom = obj.position[1] - 0.5;
-                    let objTop = obj.position[1] + 0.5;
-                    let isHit = false;
-
-                    if (obj.type === ObjectType.OBSTACLE) {
-                        objBottom = 0;
-                        objTop = OBSTACLE_HEIGHT;
-                        isHit = (dx < 0.9) && (playerBottom < objTop) && (playerTop > objBottom);
-                    } else if (obj.type === ObjectType.MISSILE) {
-                        objBottom = 0.5;
-                        objTop = 1.5;
-                        isHit = (dx < 0.6) && (playerBottom < objTop) && (playerTop > objBottom);
-                    } else if (obj.type === ObjectType.ALIEN) {
-                        objBottom = 1.0;
-                        objTop = 2.5;
-                        isHit = (dx < 1.0) && (playerBottom < objTop) && (playerTop > objBottom);
-                    } else if (obj.type === ObjectType.PULSER) {
-                        const pulseScale = 1.0 + Math.sin(state.clock.elapsedTime * 6) * 0.4;
-                        const pulseRadius = 1.1 * pulseScale;
-                        const distToPlayer = playerPos.distanceTo(new THREE.Vector3(obj.position[0], obj.position[1], obj.position[2]));
-                        isHit = distToPlayer < pulseRadius;
-                    } else if (obj.type === ObjectType.SPINNER) {
-                        const spinRotation = state.clock.elapsedTime * (3.0 + level * 0.2);
-                        const isArmHorizontal = Math.abs(Math.cos(spinRotation)) > 0.8;
-                        const hitPole = dx < 0.3;
-                        let hitArms = false;
-                        if (isArmHorizontal && Math.abs(playerPos.y - obj.position[1]) < 0.4) {
-                            if (dx < 2.2) hitArms = true;
-                        }
-                        isHit = hitPole || hitArms;
-                    }
-
-                    if (isHit) { 
+                    const isHit = checkDamageCollision(obj, playerPos, state.clock.elapsedTime, level);
+                    if (isHit) {
                         window.dispatchEvent(new Event('player-hit'));
-                        obj.active = false; 
+                        obj.active = false;
                         hasChanges = true;
-                        window.dispatchEvent(new CustomEvent('particle-burst', { 
-                            detail: { position: obj.position, color: '#ff4400', isHit: true } 
+                        window.dispatchEvent(new CustomEvent('particle-burst', {
+                            detail: { position: obj.position, color: '#ff4400', isHit: true }
                         }));
                     }
                 } else {
-                    const dy = Math.abs(obj.position[1] - playerPos.y);
-                    const collectionRadius = (hasMagnet || obj.type === ObjectType.POWERUP) ? 1.5 : 0.9;
-                    if (dx < collectionRadius && dy < 2.5) { 
+                    if (checkCollectionCollision(obj, playerPos, hasMagnet)) {
                         if (obj.type === ObjectType.GEM) {
                             collectGem(obj.points || 50);
                             audio.playGemCollect();
@@ -364,15 +317,15 @@ export const LevelManager: React.FC = () => {
                             audio.playLetterCollect();
                         } else if (obj.type === ObjectType.POWERUP && obj.powerUpType) {
                             activatePowerUp(obj.powerUpType);
-                            audio.playLetterCollect(); // Reuse sound for now
+                            audio.playLetterCollect();
                         }
-                        
+
                         window.dispatchEvent(new Event('item-collected'));
-                        window.dispatchEvent(new CustomEvent('particle-burst', { 
-                            detail: { 
-                                position: obj.position, 
-                                color: obj.color || '#ffffff' 
-                            } 
+                        window.dispatchEvent(new CustomEvent('particle-burst', {
+                            detail: {
+                                position: obj.position,
+                                color: obj.color || '#ffffff'
+                            }
                         }));
 
                         obj.active = false;
@@ -403,59 +356,15 @@ export const LevelManager: React.FC = () => {
          const isLetterDue = distanceTraveled.current >= nextLetterDistance.current;
 
          if (isLetterDue) {
-             const lane = getRandomLane(laneCount);
-             const target = ['G','E','M','I','N','I'];
-             const availableIndices = target.map((_, i) => i).filter(i => !collectedLetters.includes(i));
-
-             if (availableIndices.length > 0) {
-                 const chosenIndex = availableIndices[Math.floor(Math.random() * availableIndices.length)];
-                 const val = target[chosenIndex];
-                 const color = GEMINI_COLORS[chosenIndex];
-                 keptObjects.push({
-                    id: uuidv4(),
-                    type: ObjectType.LETTER,
-                    position: [lane * LANE_WIDTH, 1.0, spawnZ], 
-                    active: true,
-                    color: color,
-                    value: val,
-                    targetIndex: chosenIndex
-                 });
+             const letter = spawnLetter(laneCount, level, collectedLetters, spawnZ);
+             if (letter) {
+                 keptObjects.push(letter);
                  nextLetterDistance.current += getLetterInterval(level);
                  hasChanges = true;
              }
-         } else if (Math.random() > 0.08) { 
-            const spawnTypeRoll = Math.random();
-            const lane = getRandomLane(laneCount);
-
-            if (spawnTypeRoll < 0.6) {
-                const advancedRoll = Math.random();
-                if (level >= 6 && advancedRoll < 0.3) {
-                    keptObjects.push({ id: uuidv4(), type: ObjectType.SPINNER, position: [lane * LANE_WIDTH, 1.5, spawnZ], active: true, color: '#00ffff' });
-                } else if (level >= 3 && advancedRoll < 0.6) {
-                    keptObjects.push({ id: uuidv4(), type: ObjectType.PULSER, position: [lane * LANE_WIDTH, 1.5, spawnZ], active: true, color: '#aa00ff' });
-                } else {
-                    keptObjects.push({ id: uuidv4(), type: ObjectType.OBSTACLE, position: [lane * LANE_WIDTH, OBSTACLE_HEIGHT / 2, spawnZ], active: true, color: '#ff0054' });
-                }
-            } else {
-                // Chance to spawn power-up instead of gem
-                const powerUpRoll = Math.random();
-                if (powerUpRoll < 0.03) {
-                    const puTypes = [PowerUpType.SPEED, PowerUpType.FRENZY, PowerUpType.SHIELD];
-                    const chosenType = puTypes[Math.floor(Math.random() * puTypes.length)];
-                    const puColor = chosenType === PowerUpType.SPEED ? '#00ffff' : (chosenType === PowerUpType.FRENZY ? '#ffcc00' : '#ffffff');
-                    
-                    keptObjects.push({
-                        id: uuidv4(),
-                        type: ObjectType.POWERUP,
-                        powerUpType: chosenType,
-                        position: [lane * LANE_WIDTH, 1.5, spawnZ],
-                        active: true,
-                        color: puColor
-                    });
-                } else {
-                    keptObjects.push({ id: uuidv4(), type: ObjectType.GEM, position: [lane * LANE_WIDTH, 1.2, spawnZ], active: true, color: '#00ffff', points: 50 });
-                }
-            }
+         } else if (Math.random() > 0.08) {
+            const obstacle = spawnRandomObstacle(laneCount, level, spawnZ);
+            keptObjects.push(obstacle);
             hasChanges = true;
          }
     }
@@ -541,32 +450,8 @@ const GameEntity: React.FC<{ data: GameObject }> = React.memo(({ data }) => {
             )}
 
             <group ref={visualRef} position={[0, data.position[1], 0]}>
-                {data.type === ObjectType.POWERUP && (
-                    <group>
-                        <mesh geometry={POWERUP_BASE_GEO}>
-                             <meshBasicMaterial color={data.color} transparent opacity={0.2} wireframe />
-                        </mesh>
-                        <group ref={iconRef}>
-                            {data.powerUpType === PowerUpType.SPEED && (
-                                <mesh geometry={SPEED_ICON_GEO}>
-                                    <meshStandardMaterial color="#00ffff" emissive="#00ffff" emissiveIntensity={3} />
-                                </mesh>
-                            )}
-                            {data.powerUpType === PowerUpType.FRENZY && (
-                                <Center>
-                                    <Text3D font={FONT_URL} size={0.6} height={0.2}>
-                                        x3
-                                        <meshStandardMaterial color="#ffcc00" emissive="#ffcc00" emissiveIntensity={3} />
-                                    </Text3D>
-                                </Center>
-                            )}
-                            {data.powerUpType === PowerUpType.SHIELD && (
-                                <mesh geometry={SHIELD_ICON_GEO}>
-                                    <meshStandardMaterial color="#ffffff" emissive="#ffffff" emissiveIntensity={3} />
-                                </mesh>
-                            )}
-                        </group>
-                    </group>
+                {data.type === ObjectType.POWERUP && data.powerUpType && (
+                    <PowerUp position={[0, 0, 0]} powerUpType={data.powerUpType} color={data.color || '#ffffff'} />
                 )}
 
                 {data.type === ObjectType.SHOP_PORTAL && (
